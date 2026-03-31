@@ -1,127 +1,49 @@
+import telebot
+from yt_dlp import YoutubeDL
 import os
-import logging
-import yt_dlp
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler, ContextTypes
 
-# إعداد السجلات (Logging) لمعرفة الأخطاء إن وجدت
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# 1. ضع التوكن الخاص بك هنا
+BOT_TOKEN = '8353705136:AAEpS7o1pPzO2BL7CfT5at63WZ7wYDe0Yyc'
+bot = telebot.TeleBot(BOT_TOKEN)
 
-# دالة إعدادات التحميل (yt-dlp)
-def get_ydl_opts(format_type, url):
-    folder = 'downloads'
-    if not os.path.exists(folder):
-        os.makedirs(folder)
+@bot.message_handler(commands=['start'])
+def start_message(message):
+    bot.reply_to(message, "أرسل رابط يوتيوب، وسأختار لك أفضل جودة تناسب حجم الملف! 🎬")
 
-    # الإعدادات العامة (الكوكيز وفك التشفير)
-    opts = {
-        'outtmpl': f'{folder}/%(title)s.%(ext)s',
-        'quiet': False,
-        'no_warnings': False,
-        'nocheckcertificate': True,
-        'ignoreerrors': False,
-        'logtostderr': False,
-        'cachedir': False,
+@bot.message_handler(func=lambda message: True)
+def handle_video(message):
+    url = message.text
+    if "youtube.com" not in url and "youtu.be" not in url:
+        return bot.reply_to(message, "يرجى إرسال رابط يوتيوب صحيح.")
+
+    sent_msg = bot.reply_to(message, "⏳ جاري فحص الجودة والتحميل...")
+    chat_id = message.chat.id
+    output_file = f"video_{chat_id}.mp4"
+
+    # 2. إعدادات الجودة الذكية (yt-dlp)
+    ydl_opts = {
+        # يختار أفضل فيديو MP4 + أفضل صوت M4A ويدمجهما، أو أفضل ملف MP4 جاهز
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'outtmpl': output_file,
+        'max_filesize': 50 * 1024 * 1024, # حد 50 ميجا لضمان قبول تليجرام للملف
+        'merge_output_format': 'mp4',
     }
 
-    # إضافة ملف الكوكيز إذا كان موجوداً (للستوريات وإنستغرام)
-    if os.path.exists('cookies.txt'):
-        opts['cookiefile'] = 'cookies.txt'
-
-    # إعدادات الصيغة (صوت أو فيديو)
-    if format_type == 'mp3':
-        opts.update({
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-        })
-    else:
-        # تحميل أفضل جودة فيديو وصوت مدمجين بصيغة MP4
-        opts.update({
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'merge_output_format': 'mp4',
-        })
-    
-    return opts
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 أهلاً بك في بوت التحميل الشامل!\n\n"
-        "🚀 أرسل رابطاً من (YouTube, Instagram, TikTok)\n"
-        "📌 ملاحظة: اليوتيوب سيعطيك خيارات للصيغة."
-    )
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text
-    
-    # التحقق إذا كان الرابط يوتيوب لإظهار خيارات الصيغة
-    if "youtube.com" in url or "youtu.be" in url:
-        keyboard = [
-            [
-                InlineKeyboardButton("🎬 فيديو MP4", callback_data=f"mp4|{url}"),
-                InlineKeyboardButton("🎵 صوت MP3", callback_data=f"mp3|{url}")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("اختر الصيغة المطلوبة لفيديو اليوتيوب:", reply_markup=reply_markup)
-    else:
-        # للإنستغرام (ريلز/ستوري) وتيك توك يتم التحميل مباشرة كفيديو
-        await download_and_send(update, context, url, 'mp4')
-
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    format_type, url = query.data.split('|')
-    # تحديث الرسالة لإعلام المستخدم بالبدء
-    await query.edit_message_text(text="⏳ جاري التحميل والمعالجة... قد يستغرق ذلك دقيقة.")
-    await download_and_send(query, context, url, format_type, is_query=True)
-
-async def download_and_send(event, context, url, format_type, is_query=False):
-    # تحديد مكان إرسال الرد (رسالة عادية أم Query)
-    chat_id = event.message.chat_id if not is_query else event.callback_query.message.chat_id
-    temp_msg = await context.bot.send_message(chat_id=chat_id, text="🚀 بدأت عملية السحب من السيرفر...")
-
-    ydl_opts = get_ydl_opts(format_type, url)
-    
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info)
-            
-            # تصحيح الامتداد في حالة MP3
-            if format_type == 'mp3':
-                filename = os.path.splitext(filename)[0] + '.mp3'
-            
-        # إرسال الملف للمستخدم
-        with open(filename, 'rb') as file:
-            if format_type == 'mp3':
-                await context.bot.send_audio(chat_id=chat_id, audio=file, caption="✅ تم تحميل الصوت بنجاح")
-            else:
-                await context.bot.send_video(chat_id=chat_id, video=file, caption="✅ تم تحميل الفيديو بنجاح")
-        
-        # تنظيف: حذف الملف من الكمبيوتر بعد الإرسال
-        if os.path.exists(filename):
-            os.remove(filename)
-            
-    except Exception as e:
-        await context.bot.send_message(chat_id=chat_id, text=f"❌ عذراً، حدث خطأ أثناء التحميل.\nالتفاصيل: {str(e)}")
-    finally:
-        await temp_msg.delete()
+            title = info.get('title', 'Video')
 
-# تشغيل البوت
-if __name__ == '__main__':
-    # استبدل التوكن هنا
-    TOKEN = "8265386846:AAGqz_oBtnEEBT3dPcYQJXVOiLviD4olgVc"
-    
-    application = Application.builder().token(TOKEN).build()
-    
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(CallbackQueryHandler(button_callback))
-    
-    print("--- البوت يعمل الآن بنجاح ---")
-    application.run_polling()
+        # 3. إرسال الفيديو للمستخدم
+        with open(output_file, 'rb') as v:
+            bot.send_video(chat_id, v, caption=f"✅ {title}\nبأفضل جودة متاحة.")
+        
+        # تنظيف الجهاز وحذف الملف بعد الإرسال
+        os.remove(output_file)
+        bot.delete_message(chat_id, sent_msg.message_id)
+
+    except Exception as e:
+        bot.edit_message_text(f"❌ خطأ: الحجم قد يكون أكبر من 50MB أو الرابط غير مدعوم.", chat_id, sent_msg.message_id)
+        if os.path.exists(output_file): os.remove(output_file)
+
+bot.polling()
